@@ -1,0 +1,6 @@
+fastapi
+protobuf
+uvicorn
+configparser
+requests
+watchdog

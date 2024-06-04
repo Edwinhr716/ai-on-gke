@@ -1,19 +1,3 @@
-# Copyright 2023 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""HTTP Server to interact with SAX Cluster, SAX Admin Server, and SAX Model Server."""
-
 from fastapi import FastAPI, HTTPException, Response
 import uvicorn
 import json
@@ -41,6 +25,7 @@ class Model(BaseModel):
     model_path: str
     checkpoint: str
     replicas: int
+    overrides: Optional[str] = None
 
 class ModelID(BaseModel):
     model: str
@@ -104,13 +89,33 @@ def publish(request: Model, status_code=200):
         ckpt = request.checkpoint
         replicas = request.replicas
 
-        sax.Publish(model, model_path, ckpt, replicas)
-        response = {
-            'model': model,
-            'model_path': model_path,
-            'checkpoint': ckpt,
-            'replicas': replicas,
-        }
+        if request.overrides:
+            try: 
+                overrides = {}
+                override_values = request.overrides.split()
+                for override in override_values:
+                    key_val = override.split("=")
+                    overrides[key_val[0]] = key_val[1]
+                sax.Publish(model, model_path, ckpt, replicas, overrides)
+                response = {
+                    'model': model,
+                    'model_path': model_path,
+                    'checkpoint': ckpt,
+                    'replicas': replicas,
+                    'overrides': overrides,
+                }
+            except Exception as e:
+                logging.exception("Exception in model publish with overrides, format is of 'key=val key1-val1 key2=val2'")
+                raise HTTPException(status_code=500, detail=str(e))
+                return
+        else:
+            sax.Publish(model, model_path, ckpt, replicas)
+            response = {
+                'model': model,
+                'model_path': model_path,
+                'checkpoint': ckpt,
+                'replicas': replicas,
+            }
         response = Response(
             content=json.dumps(response, indent=4), 
             media_type="application/json"
@@ -195,4 +200,3 @@ def update(request: Model, status_code=200):
     except Exception as e:
         logging.exception("Exception in model update")
         raise HTTPException(status_code=500, detail=str(e))
-        return

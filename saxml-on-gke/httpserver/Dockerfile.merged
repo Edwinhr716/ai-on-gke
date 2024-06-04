@@ -1,10 +1,27 @@
 #
 # BUILDER 
 ##############################################################################################################
-FROM python:3.10 as builder
+# Ubuntu:22.04
+# Use the latest Ubuntu 22.04 version in Docker Hub.
+# https://hub.docker.com/_/ubuntu/tags?page=1&name=22.04
+ARG UBUNTU_VERSION=83f0c2a8d6f266d687d55b5cb1cb2201148eb7ac449e4202d9646b9083f1cee0
+
+FROM ubuntu@sha256:${UBUNTU_VERSION} as builder
+
+ENV DEBIAN_FRONTEND=noninteractive
 
 ENV BAZEL_VERSION=5.4.0
 ENV SAXML_VERSION=1.1.0
+
+RUN apt -y update && \
+apt install -y \
+  python3.10 \ 
+  python3.10-venv \
+  python3-pip \
+  curl
+
+RUN update-alternatives --install \
+    /usr/bin/python3 python3 /usr/bin/python3.10 1
 
 RUN curl https://bazel.build/bazel-release.pub.gpg | apt-key --keyring /usr/share/keyrings/bazel-archive-keyring.gpg add - && \
 curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key --keyring /usr/share/keyrings/cloud.google.gpg add - && \
@@ -12,20 +29,20 @@ echo "deb [arch=amd64 signed-by=/usr/share/keyrings/bazel-archive-keyring.gpg] h
 echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list && \
 apt -y update && \
 apt install -y \
+  ca-certificates \
   apt-transport-https \
   bazel-${BAZEL_VERSION} \
-  curl \
   gnupg \
   google-cloud-cli \
-  patch \
-  python3-pip && \
+  git \
+  patch && \
 rm -rf /var/lib/apt/lists/* && \
 update-alternatives --install /usr/bin/bazel bazel /usr/bin/bazel-${BAZEL_VERSION} 20
 
 ENV PATH=/venv/bin:${PATH}
 COPY requirements-build.txt /venv/requirements-build.txt
-RUN python -m venv /venv && \
-pip install --no-cache-dir -r /venv/requirements-build.txt
+RUN python3 -m venv /venv && \
+pip3 install --no-cache-dir -r /venv/requirements-build.txt
 
 RUN git clone https://github.com/google/saxml.git && \
 cd saxml && \
@@ -43,33 +60,54 @@ RUN cp --dereference --recursive /saxml/bazel-out/k8-fastbuild/bin /venv/lib/sax
 #
 # FINAL 
 ##############################################################################################################
-FROM python:3.10-slim as final
+ARG UBUNTU_VERSION=83f0c2a8d6f266d687d55b5cb1cb2201148eb7ac449e4202d9646b9083f1cee0
+
+FROM ubuntu@sha256:${UBUNTU_VERSION} as final
+
+RUN apt -y update && \
+apt install -y \
+  python3.10 \ 
+  python3.10-venv \
+  python3-pip
+
+RUN update-alternatives --install \
+    /usr/bin/python3 python3 /usr/bin/python3.10 1
 
 ENV PATH=/venv/bin:${PATH}
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONPATH=/venv/lib/saxml-client/saxml/client/python
 ENV PYTHONUNBUFFERED=1
 
-COPY requirements.txt /venv/requirements.txt
-RUN python -m venv /venv && \
-pip install --no-cache-dir -r /venv/requirements.txt
+COPY requirements-merged.txt /venv/requirements.txt
+RUN python3 -m venv /venv && \
+pip3 install --no-cache-dir -r /venv/requirements.txt
 
 COPY --from=builder /venv/lib/saxml-client /venv/lib/saxml-client
 COPY http_server.py /saxml/saxml/httpserver/
+COPY publisher.py /saxml/saxml/httpserver/
 
 WORKDIR /saxml/saxml/httpserver
 
 EXPOSE 8888
 
+ENV SAX_CELL=/sax/cell
 ENV SAX_ROOT=""
+ENV SAX_DIR=""
+ENV ENABLE_PUBLISHER="TRUE"
 
 RUN echo '#!/bin/bash\n\
 PATH=/venv/bin:${PATH}\n\
 PYTHONPATH=/venv/lib/saxml-client/saxml/client/python\n\
+if [[ -n "$SAX_DIR" ]]; then\n\
+    SAX_ROOT=${SAX_DIR}/sax-root\n\
+fi\n\
 if [[ -z "$SAX_ROOT"  ]]; then\n\
 	if [[ -n "$SAX_GCS_BUCKET" && -n "$SAX_REPLICA_NAME" ]]; then\n\
 		SAX_ROOT=gs://${SAX_GCS_BUCKET}/${SAX_REPLICA_NAME}/sax-root \n\
 	fi\n\
+fi\n\
+if [[  "$ENABLE_PUBLISHER" == "TRUE" ]]; then\n\
+  python3 -m publisher &\n\
 fi\n\
 uvicorn http_server:app --host=0.0.0.0 --port=8888\n' \
 > /saxml/saxml/httpserver/http_server_entrypoint.sh && chmod +x /saxml/saxml/httpserver/http_server_entrypoint.sh
