@@ -67,5 +67,6 @@ resource "kubernetes_manifest" "latency-profile-generator" {
     file_prefix                                = var.file_prefix
     save_aggregated_result                     = var.save_aggregated_result
     models                                     = var.models
+    stream_request = var.stream_request
   }))
 }
